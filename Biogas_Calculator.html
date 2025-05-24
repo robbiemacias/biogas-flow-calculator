@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Biogas Flow Allocation Calculator</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
+    input[type='number'] { width: 70px; }
+    #result, #chartContainer { margin-top: 30px; }
+  </style>
+</head>
+<body>
+  <h1>Biogas Flow Allocation Calculator</h1>
+
+  <button onclick="loadCSVFromWeb()">Load from Google Sheets</button><br/><br/>
+
+  <label for="targetFlow">Target Upgrader Flow Rate (scfm): </label>
+  <input type="number" id="targetFlow" value="1000" /><br/><br/>
+
+  <label for="maxImpurity">Max Combined O2 + N2 (%): </label>
+  <input type="number" id="maxImpurity" step="0.01" value="1.5" /><br/><br/>
+
+  <table id="inputTable">
+    <thead>
+      <tr>
+        <th>Dairy</th><th>CH4 (%)</th><th>CO2 (%)</th><th>O2 (%)</th><th>N2 (%)</th><th>Original Flow (scfm)</th><th>Min Flow</th><th>Max Flow</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <button onclick="calculateFlows()">Calculate Optimal Flows</button>
+  <div id="result"></div>
+  <div id="chartContainer">
+    <canvas id="flowChart" width="400" height="200"></canvas>
+  </div>
+
+  <script>
+    function loadCSVFromWeb() {
+      const url = "https://script.google.com/macros/s/AKfycbz2jPq1Ys_CwnJyBdpUlb8G0WsNHwYBqosx7iPlKFfX-6nIqIsoIUztN1Xm5X5uMf1q/exec";
+      fetch(url)
+        .then(res => res.text())
+        .then(csv => {
+          const lines = csv.split("\n");
+          const tableBody = document.querySelector("#inputTable tbody");
+          tableBody.innerHTML = "";
+          for (let line of lines) {
+            const values = line.split(',').map(x => x.trim());
+            if (values.length >= 6 && values[0] !== "Dairy") {
+              const row = document.createElement("tr");
+              row.innerHTML = `
+                <td>${values[0]}</td>
+                <td><input type="number" value="${values[1]}"></td>
+                <td><input type="number" value="${values[2]}"></td>
+                <td><input type="number" value="${values[3]}"></td>
+                <td><input type="number" value="${values[4]}"></td>
+                <td><input type="number" value="${values[5]}"></td>
+                <td><input type="number" value="${values[6] || 0}"></td>
+                <td><input type="number" value="${values[7] || 99999}"></td>
+              `;
+              tableBody.appendChild(row);
+            }
+          }
+        });
+    }
+
+    function calculateFlows() {
+      const rows = document.querySelectorAll("#inputTable tbody tr");
+      const targetFlow = parseFloat(document.getElementById("targetFlow").value);
+      const maxImpurity = parseFloat(document.getElementById("maxImpurity").value);
+
+      let totalOriginalFlow = 0;
+      let impurityWeightedSum = 0;
+      const impurityContributions = [];
+      const dairies = [];
+      const minFlows = [];
+      const maxFlows = [];
+
+      rows.forEach(row => {
+        const cells = row.querySelectorAll("input");
+        const o2 = parseFloat(cells[2].value);
+        const n2 = parseFloat(cells[3].value);
+        const originalFlow = parseFloat(cells[4].value);
+        const minFlow = parseFloat(cells[5].value);
+        const maxFlow = parseFloat(cells[6].value);
+        const impurity = o2 + n2;
+
+        totalOriginalFlow += originalFlow;
+        impurityWeightedSum += impurity * originalFlow;
+        impurityContributions.push(impurity);
+        dairies.push(row.cells[0].textContent);
+        minFlows.push(minFlow);
+        maxFlows.push(maxFlow);
+      });
+
+      const avgImpurity = impurityWeightedSum / totalOriginalFlow;
+      const flows = [];
+
+      if (avgImpurity <= maxImpurity) {
+        let totalWeight = 0;
+        impurityContributions.forEach((impurity, i) => {
+          const weight = maxImpurity - impurity;
+          totalWeight += weight > 0 ? weight : 0;
+        });
+
+        impurityContributions.forEach((impurity, i) => {
+          const weight = maxImpurity - impurity;
+          let allocation = (weight > 0 ? weight : 0) / totalWeight * targetFlow;
+          allocation = Math.max(minFlows[i], Math.min(maxFlows[i], allocation));
+          flows.push(parseFloat(allocation.toFixed(2)));
+        });
+
+        document.getElementById("result").innerHTML =
+          "<h3>Calculated Flow Allocations (scfm)</h3><ul>" +
+          flows.map((f, i) => `<li>${dairies[i]}: ${f}</li>`).join('') +
+          "</ul>";
+
+        renderChart(dairies, flows);
+      } else {
+        document.getElementById("result").textContent =
+          "The average impurity exceeds the maximum allowed. Please adjust input values.";
+        renderChart([], []);
+      }
+    }
+
+    function renderChart(labels, data) {
+      const ctx = document.getElementById('flowChart').getContext('2d');
+      if (window.flowChartInstance) window.flowChartInstance.destroy();
+      window.flowChartInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: 'Proposed Flow (scfm)',
+            data: data,
+            backgroundColor: 'rgba(54, 162, 235, 0.6)',
+            borderColor: 'rgba(54, 162, 235, 1)',
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            y: { beginAtZero: true }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
